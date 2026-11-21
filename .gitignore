@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+web/dist/
+web/.env.local
+web/.env*.local
+
+# Firebase
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+
+# Android
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.iml
+*.apk
+*.aab
+*.keystore
+*.jks
+*.tsbuildinfo
+# Keep google-services.json ignored if private; use google-services.json.example in repo
+android/app/google-services.json
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/

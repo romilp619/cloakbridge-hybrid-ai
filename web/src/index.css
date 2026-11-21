@@ -1,0 +1,166 @@
+@import "tailwindcss";
+
+:root {
+  --cc-app-bg: #08090A;
+  --cc-nav-bg: #0D0E10;
+  --cc-canvas-bg: #101113;
+  --cc-inspector-bg: #131518;
+  --cc-surface: #17191C;
+  --cc-elevated: #202226;
+  --cc-hover: #2A2D31;
+  --cc-border: #303237;
+  --cc-divider: #25272B;
+  --cc-text: #F1F2F3;
+  --cc-text-secondary: #A3A7AD;
+  --cc-text-muted: #777D85;
+  --cc-orange: #E37A37;
+  --cc-orange-hover: #F0904E;
+  --cc-green: #56B89A;
+  --cc-blue: #7D9DBA;
+  --cc-amber: #E8B35D;
+  --cc-red: #DB6666;
+}
+
+@layer base {
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background-color: var(--cc-app-bg);
+    color: var(--cc-text);
+  }
+
+  code,
+  pre,
+  .font-mono {
+    font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+  }
+}
+
+.cc-card {
+  background-color: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  border-radius: 8px;
+}
+
+.cc-elevated {
+  background-color: var(--cc-elevated);
+  border: 1px solid var(--cc-border);
+  border-radius: 8px;
+}
+
+.cc-guides {
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* Unified Button Design System */
+.cc-btn-primary {
+  background-color: var(--cc-orange);
+  color: #0D0E10;
+  border: 1px solid var(--cc-orange);
+  border-radius: 8px;
+  font-weight: 600;
+  min-height: 34px;
+  transition: background-color 140ms ease, border-color 140ms ease, opacity 140ms ease;
+}
+
+.cc-btn-primary:hover:not(:disabled) {
+  background-color: var(--cc-orange-hover);
+  border-color: var(--cc-orange-hover);
+}
+
+.cc-btn-primary:focus-visible,
+.cc-btn-secondary:focus-visible,
+.cc-btn-ghost:focus-visible,
+.cc-btn-danger:focus-visible {
+  outline: 2px solid var(--cc-orange);
+  outline-offset: 2px;
+}
+
+.cc-btn-primary:disabled,
+.cc-btn-secondary:disabled,
+.cc-btn-ghost:disabled,
+.cc-btn-danger:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.cc-btn-secondary {
+  background-color: var(--cc-elevated);
+  color: var(--cc-text);
+  border: 1px solid var(--cc-border);
+  border-radius: 8px;
+  font-weight: 500;
+  min-height: 34px;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.cc-btn-secondary:hover:not(:disabled) {
+  background-color: var(--cc-hover);
+  border-color: #3F4248;
+}
+
+.cc-btn-ghost {
+  background-color: transparent;
+  color: var(--cc-text-secondary);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  min-height: 30px;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.cc-btn-ghost:hover:not(:disabled) {
+  background-color: var(--cc-elevated);
+  color: var(--cc-text);
+}
+
+.cc-btn-danger {
+  background-color: #241415;
+  color: var(--cc-red);
+  border: 1px solid rgba(219, 102, 102, 0.35);
+  border-radius: 8px;
+  font-weight: 500;
+  min-height: 34px;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.cc-btn-danger:hover:not(:disabled) {
+  background-color: #31191B;
+  border-color: rgba(219, 102, 102, 0.6);
+}
+
+@keyframes ccFlowDash {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+
+.cc-wire-running {
+  stroke-dasharray: 5 5;
+  animation: ccFlowDash 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cc-wire-running {
+    animation: none;
+  }
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2C2F34;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3E424A;
+}

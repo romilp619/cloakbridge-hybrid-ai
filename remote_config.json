@@ -1,0 +1,46 @@
+{
+  "parameters": {
+    "cloud_audit_model": {
+      "defaultValue": {
+        "value": "gemini-3.8-flash"
+      },
+      "description": "Cloud Gemini model used via Firebase AI Logic ONLY_IN_CLOUD / PREFER_IN_CLOUD for deep audits on locally anonymized documents.",
+      "valueType": "STRING"
+    },
+    "cloud_fallback_model": {
+      "defaultValue": {
+        "value": "gemini-3.5-flash-lite"
+      },
+      "description": "Fast cloud fallback model used when PREFER_ON_DEVICE falls back on unsupported devices.",
+      "valueType": "STRING"
+    },
+    "default_policy_profile": {
+      "defaultValue": {
+        "value": "medical"
+      },
+      "description": "Default local PII/PHI privacy redaction policy profile (medical | legal | finance | strict).",
+      "valueType": "STRING"
+    },
+    "max_on_device_chars": {
+      "defaultValue": {
+        "value": "12000"
+      },
+      "description": "Maximum character threshold for single-pass on-device Gemini Nano 4 triage before chunking or cloud escalation.",
+      "valueType": "NUMBER"
+    },
+    "strict_zero_leak_block": {
+      "defaultValue": {
+        "value": "true"
+      },
+      "description": "When true, blocks any outbound cloud call if unredacted raw vault tokens are detected in the outbound payload.",
+      "valueType": "BOOLEAN"
+    },
+    "policy_rules_json": {
+      "defaultValue": {
+        "value": "{\"medical\":{\"label\":\"Medical & HIPAA\",\"categories\":[\"PERSON\",\"ID\",\"ACCT\",\"PHONE\",\"EMAIL\",\"LOC\",\"DOB\",\"ORG\"],\"auditFocus\":\"CPT/ICD upcoding, duplicate facility fees, out-of-network balance billing, No Surprises Act protections\"},\"legal\":{\"label\":\"Legal & Lease\",\"categories\":[\"PERSON\",\"ID\",\"ACCT\",\"PHONE\",\"EMAIL\",\"LOC\",\"ORG\"],\"auditFocus\":\"illegal junk fees, automatic renewal traps, one-sided indemnification, non-refundable deposit clauses, IP overreach\"},\"finance\":{\"label\":\"Finance & Tax\",\"categories\":[\"PERSON\",\"ID\",\"ACCT\",\"PHONE\",\"EMAIL\",\"LOC\",\"ORG\",\"AMOUNT_SENSITIVE\"],\"auditFocus\":\"hidden APR/fee escalation, junk wire fees, unauthorized recurring charges, late-fee compounding\"},\"strict\":{\"label\":\"Strict Zero-Trust\",\"categories\":[\"PERSON\",\"ID\",\"ACCT\",\"PHONE\",\"EMAIL\",\"LOC\",\"DOB\",\"ORG\",\"AMOUNT_SENSITIVE\"],\"auditFocus\":\"comprehensive risk, liability, compliance, and hidden obligations analysis\"}}"
+      },
+      "description": "JSON policy profiles dynamically pushed to Web and Android clients via Remote Config.",
+      "valueType": "JSON"
+    }
+  }
+}

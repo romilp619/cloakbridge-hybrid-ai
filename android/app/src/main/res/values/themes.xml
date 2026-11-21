@@ -1,0 +1,6 @@
+<resources>
+    <style name="Theme.CloakBridge" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#08090A</item>
+        <item name="android:navigationBarColor">#0D0E10</item>
+    </style>
+</resources>

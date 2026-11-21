@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<defaultsMap>
+    <entry>
+        <key>cloud_audit_model</key>
+        <value>gemini-3.8-flash</value>
+    </entry>
+    <entry>
+        <key>cloud_fallback_model</key>
+        <value>gemini-3.5-flash-lite</value>
+    </entry>
+    <entry>
+        <key>default_policy_profile</key>
+        <value>medical</value>
+    </entry>
+    <entry>
+        <key>max_on_device_chars</key>
+        <value>12000</value>
+    </entry>
+    <entry>
+        <key>strict_zero_leak_block</key>
+        <value>true</value>
+    </entry>
+</defaultsMap>

@@ -1,0 +1,208 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model — CloakBridge (Privacy-First Hybrid AI Auditor)
+// ===============================================================
+//
+// This security rules file enforces strict owner-only isolation and
+// zero-PII schema boundaries for CloakBridge. Raw PII must never be
+// persisted to Firestore; only verified, scrubbed case payloads are
+// accepted.
+//
+// Collection: users
+// Document ID: {userId} (Firebase Auth UID) — OPTIONAL preferences doc
+// Access: Owner-only (read, create, update, delete)
+// Allowed Fields (hasOnly):
+//   - displayName: string (optional, 0..80 chars)
+//   - defaultPolicy: string (optional, enum: 'medical' | 'legal' | 'finance' | 'strict')
+//   - updatedAt: timestamp (required)
+//
+// Subcollection: users/{userId}/cases
+// Document ID: {caseId}
+// Access: Owner-only (read, create, update, delete)
+// Allowed Fields (hasOnly & hasAll — all 15 fields required):
+//   - title: string (required, 1..140 chars)
+//   - policyProfile: string (required, enum: 'medical' | 'legal' | 'finance' | 'strict')
+//   - platform: string (required, enum: 'web' | 'android')
+//   - scrubbedText: string (required, 1..30000 chars)
+//   - tokenCount: int (required, 0..500)
+//   - zeroLeakVerified: bool (required, must be true on create and update)
+//   - triageSummary: string (required, 0..4000 chars)
+//   - riskScore: int (required, 0..100)
+//   - triageSource: string (required, enum: 'ON_DEVICE' | 'IN_CLOUD' | 'LOCAL_RULE')
+//   - cloudAuditMarkdown: string (required, 0..30000 chars)
+//   - cloudAuditSource: string (required, enum: 'IN_CLOUD' | 'ON_DEVICE' | 'PENDING')
+//   - disputeDraftScrubbed: string (required, 0..20000 chars)
+//   - estimatedSavingsUsd: int | float (required, 0..10000000)
+//   - createdAt: timestamp (required, immutable on update)
+//   - updatedAt: timestamp (required)
+//
+// All other collections and subcollections are denied by default.
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Check if the caller is authenticated via Firebase Auth.
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if the authenticated caller owns the path scoped to userId.
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Verify a uid field, if ever present, matches the authenticated caller on create.
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == request.auth.uid;
+    }
+
+    // Verify a uid field, if ever present, cannot be modified on update.
+    function uidNotModified() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == resource.data.uid;
+    }
+
+    // Enforce strict schema allowlist (blocks extraneous/unmodeled fields).
+    function hasOnlyAllowedFields(data, fields) {
+      return data.keys().hasOnly(fields);
+    }
+
+    // Enforce that all required fields exist on the resulting document.
+    function hasRequiredFields(data, fields) {
+      return data.keys().hasAll(fields);
+    }
+
+    // Enforce that specified immutable fields are unchanged on update.
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // Validate string type and inclusive character length bounds.
+    function isValidString(value, minLen, maxLen) {
+      return value is string && value.size() >= minLen && value.size() <= maxLen;
+    }
+
+    // Validate inclusive integer bounds.
+    function isValidIntRange(value, minVal, maxVal) {
+      return value is int && value >= minVal && value <= maxVal;
+    }
+
+    // Validate inclusive numeric (int or float) bounds; rejects NaN/Infinity/out-of-range.
+    function isValidNumberRange(value, minVal, maxVal) {
+      return (value is int || value is float) && value >= minVal && value <= maxVal;
+    }
+
+    // Enum validators
+    function isValidPolicyProfile(value) {
+      return value is string && value in ['medical', 'legal', 'finance', 'strict'];
+    }
+
+    function isValidPlatform(value) {
+      return value is string && value in ['web', 'android'];
+    }
+
+    function isValidTriageSource(value) {
+      return value is string && value in ['ON_DEVICE', 'IN_CLOUD', 'LOCAL_RULE'];
+    }
+
+    function isValidCloudAuditSource(value) {
+      return value is string && value in ['IN_CLOUD', 'ON_DEVICE', 'PENDING'];
+    }
+
+    // ===============================================================
+    // Domain Validators (Invoked on BOTH create and update)
+    // ===============================================================
+
+    // Validate optional user preferences document at users/{userId}.
+    function isValidUserPreferences(data) {
+      return hasOnlyAllowedFields(data, ['displayName', 'defaultPolicy', 'updatedAt']) &&
+        hasRequiredFields(data, ['updatedAt']) &&
+        data.updatedAt is timestamp &&
+        (!('displayName' in data) || isValidString(data.displayName, 0, 80)) &&
+        (!('defaultPolicy' in data) || isValidPolicyProfile(data.defaultPolicy));
+    }
+
+    // Validate anonymized case document at users/{userId}/cases/{caseId}.
+    function isValidCase(data) {
+      let allowedFields = [
+        'title',
+        'policyProfile',
+        'platform',
+        'scrubbedText',
+        'tokenCount',
+        'zeroLeakVerified',
+        'triageSummary',
+        'riskScore',
+        'triageSource',
+        'cloudAuditMarkdown',
+        'cloudAuditSource',
+        'disputeDraftScrubbed',
+        'estimatedSavingsUsd',
+        'createdAt',
+        'updatedAt'
+      ];
+
+      return hasOnlyAllowedFields(data, allowedFields) &&
+        hasRequiredFields(data, allowedFields) &&
+        isValidString(data.title, 1, 140) &&
+        isValidPolicyProfile(data.policyProfile) &&
+        isValidPlatform(data.platform) &&
+        isValidString(data.scrubbedText, 1, 30000) &&
+        isValidIntRange(data.tokenCount, 0, 500) &&
+        data.zeroLeakVerified is bool &&
+        data.zeroLeakVerified == true &&
+        isValidString(data.triageSummary, 0, 4000) &&
+        isValidIntRange(data.riskScore, 0, 100) &&
+        isValidTriageSource(data.triageSource) &&
+        isValidString(data.cloudAuditMarkdown, 0, 30000) &&
+        isValidCloudAuditSource(data.cloudAuditSource) &&
+        isValidString(data.disputeDraftScrubbed, 0, 20000) &&
+        isValidNumberRange(data.estimatedSavingsUsd, 0, 10000000) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // Optional user preferences document (strictly private to owner).
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) &&
+        uidUnchanged() &&
+        isValidUserPreferences(request.resource.data);
+      allow update: if isOwner(userId) &&
+        uidNotModified() &&
+        isValidUserPreferences(request.resource.data);
+      allow delete: if isOwner(userId);
+
+      // Anonymized audit cases scoped strictly to owning user.
+      // Note: Parent users/{userId} doc is optional and not required to exist.
+      match /cases/{caseId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) &&
+          uidUnchanged() &&
+          isValidCase(request.resource.data);
+        allow update: if isOwner(userId) &&
+          uidNotModified() &&
+          isValidCase(request.resource.data) &&
+          areImmutableFieldsUnchanged(['createdAt']) &&
+          request.resource.data.createdAt == resource.data.createdAt;
+        allow delete: if isOwner(userId);
+      }
+    }
+
+    // Default deny for all other paths.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
