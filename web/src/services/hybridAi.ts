@@ -28,6 +28,8 @@ import type {
 interface ChromeLanguageModelGlobal {
   availability: () => Promise<'available' | 'downloadable' | 'downloading' | 'unavailable'>;
   create: (options?: {
+    expectedInputs?: Array<{ type: string; languages?: string[] }>;
+    expectedOutputs?: Array<{ type: string; languages?: string[] }>;
     monitor?: (monitor: EventTarget) => void;
   }) => Promise<{ destroy?: () => void }>;
 }
@@ -35,6 +37,37 @@ interface ChromeLanguageModelGlobal {
 function getChromeLanguageModel(): ChromeLanguageModelGlobal | null {
   const g = globalThis as unknown as { LanguageModel?: ChromeLanguageModelGlobal };
   return g.LanguageModel ?? null;
+}
+
+/**
+ * Returns true ONLY when Gemini Nano 4 is already fully downloaded and immediately available.
+ * Prevents calling LanguageModel.create() while the ~1.7 GB model is still downloading,
+ * which would otherwise block inference for several minutes.
+ */
+async function isNanoReadyNow(): Promise<boolean> {
+  const lm = getChromeLanguageModel();
+  if (!lm || typeof lm.availability !== 'function') return false;
+  try {
+    return (await lm.availability()) === 'available';
+  } catch {
+    return false;
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
 }
 
 export async function checkNanoAvailability(): Promise<NanoStatus> {
@@ -72,7 +105,8 @@ export async function checkNanoAvailability(): Promise<NanoStatus> {
         supported: true,
         availability: 'downloading',
         downloadProgress: null,
-        detail: 'Gemini Nano 4 is currently downloading in the background.',
+        detail:
+          'Gemini Nano 4 is downloading in Chrome. Local deterministic shield & hybrid cloud fallback stay instant while downloading.',
       };
     }
     return {
@@ -98,6 +132,8 @@ export async function downloadNanoModel(
   if (!lm) return checkNanoAvailability();
 
   const session = await lm.create({
+    expectedInputs: [{ type: 'text', languages: ['en'] }],
+    expectedOutputs: [{ type: 'text', languages: ['en'] }],
     monitor(m) {
       m.addEventListener('downloadprogress', (e: Event) => {
         const progressEvent = e as Event & { loaded?: number };
@@ -154,6 +190,12 @@ export async function extractDocumentFromImageOnDevice(imageFile: File): Promise
   if (!ai) {
     throw new Error('Firebase AI Logic is not initialized yet. Add your Firebase config in .env.local.');
   }
+  const ready = await isNanoReadyNow();
+  if (!ready) {
+    throw new Error(
+      'Gemini Nano 4 is not finished downloading yet. Open "Nano Setup / Hybrid" to complete download before scanning images locally.'
+    );
+  }
   const t0 = performance.now();
   const model = getGenerativeModel(ai, {
     mode: InferenceMode.ONLY_ON_DEVICE,
@@ -179,8 +221,9 @@ export async function extractDocumentFromImageOnDevice(imageFile: File): Promise
 
 /**
  * STAGE 1 — LOCAL PRIVACY SHIELD (InferenceMode.ONLY_ON_DEVICE)
- * Runs strictly on-device with Gemini Nano 4 to semantically detect PII/PHI/secrets.
- * NEVER falls back to the cloud — merges with deterministic local rules so 0 raw bytes leak.
+ * Runs strictly on-device with Gemini Nano 4 (when available) to semantically detect PII/PHI/secrets.
+ * NEVER falls back to the cloud — merges with deterministic local rules so 0 raw bytes leak,
+ * and never blocks if Gemini Nano is still downloading in the background.
  */
 export async function runLocalPrivacyShield(
   rawText: string,
@@ -193,7 +236,8 @@ export async function runLocalPrivacyShield(
   const aiDetections: Array<{ value: string; category: EntityCategory }> = [];
   let engineUsed: ScrubResult['engineUsed'] = 'LOCAL_RULE_FALLBACK';
 
-  if (ai) {
+  const nanoReady = await isNanoReadyNow();
+  if (ai && nanoReady) {
     try {
       const nanoModel = getGenerativeModel(ai, {
         mode: InferenceMode.ONLY_ON_DEVICE,
@@ -202,39 +246,52 @@ export async function runLocalPrivacyShield(
             expectedInputs: [{ type: 'text', languages: ['en'] }],
             expectedOutputs: [{ type: 'text', languages: ['en'] }],
           },
-        },
-        generationConfig: {
-          responseMimeType: 'application/json',
-          responseSchema: Schema.object({
-            properties: {
-              entities: Schema.array({
-                items: Schema.object({
-                  properties: {
-                    value: Schema.string(),
-                    category: Schema.enumString({
-                      enum: ['PERSON', 'ID', 'ACCT', 'PHONE', 'EMAIL', 'LOC', 'DOB', 'ORG'],
-                    }),
+          promptOptions: {
+            responseConstraint: {
+              type: 'object',
+              properties: {
+                entities: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      value: { type: 'string' },
+                      category: {
+                        type: 'string',
+                        enum: ['PERSON', 'ID', 'ACCT', 'PHONE', 'EMAIL', 'LOC', 'DOB', 'ORG'],
+                      },
+                    },
+                    required: ['value', 'category'],
                   },
-                }),
-              }),
+                },
+              },
+              required: ['entities'],
             },
-          }),
+          },
         },
       });
 
       const truncated = rawText.slice(0, remoteConfig.maxOnDeviceChars);
       const prompt = `Extract exact sensitive PII/PHI substrings from the document below for policy "${policyDef.label}".
-Return ONLY exact substrings copied verbatim from the text (names of people, doctors, organizations, SSN/EIN/policy numbers, account numbers, street addresses, phone numbers, emails, DOBs).
-Do NOT include prices, CPT codes, or generic legal terms.
+Return ONLY JSON with {"entities":[{"value":"exact substring","category":"PERSON|ID|ACCT|PHONE|EMAIL|LOC|DOB|ORG"}]}.
+Do NOT include dollar prices, CPT codes, or generic legal terms.
 
 DOCUMENT:
 ${truncated}`;
 
-      const result = await nanoModel.generateContent(prompt);
-      const parsed = JSON.parse(result.response.text()) as {
-        entities?: Array<{ value?: string; category?: EntityCategory }>;
-      };
-      if (Array.isArray(parsed.entities)) {
+      const result = await withTimeout(
+        nanoModel.generateContent(prompt),
+        12_000,
+        'On-device Nano Privacy Shield'
+      );
+      const rawJson = result.response.text().trim();
+      const jsonMatch = rawJson.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch
+        ? (JSON.parse(jsonMatch[0]) as {
+            entities?: Array<{ value?: string; category?: EntityCategory }>;
+          })
+        : null;
+      if (parsed && Array.isArray(parsed.entities)) {
         for (const item of parsed.entities) {
           if (item.value && item.category) {
             aiDetections.push({ value: item.value, category: item.category });
@@ -243,9 +300,9 @@ ${truncated}`;
         engineUsed = 'ON_DEVICE_NANO';
       }
     } catch (err) {
-      // ONLY_ON_DEVICE intentionally throws if Gemini Nano is unavailable; NEVER spill raw PII to cloud!
+      // ONLY_ON_DEVICE intentionally never spills raw PII to cloud; deterministic engine protects locally.
       console.info(
-        '[CloakBridge] ONLY_ON_DEVICE Nano shield unavailable; protected locally via deterministic engine (0 cloud bytes):',
+        '[CloakBridge] On-device Nano shield skipped; protected locally via deterministic engine (0 cloud bytes):',
         (err as Error).message
       );
     }
@@ -273,8 +330,9 @@ ${truncated}`;
 
 /**
  * STAGE 2 — INSTANT OFFLINE TRIAGE (InferenceMode.PREFER_ON_DEVICE)
- * Prefers local Gemini Nano 4 ($0, offline-capable) on the scrubbed document,
- * seamlessly falling back to Remote-Config-controlled cloud fallback model on unsupported browsers.
+ * Prefers local Gemini Nano 4 ($0, offline-capable) on the scrubbed document when Nano is available,
+ * and seamlessly uses the Remote-Config-controlled cloud fallback model while Nano is downloading
+ * or unsupported (with offline deterministic fallback when disconnected).
  */
 export async function runHybridTriage(
   scrubbedText: string,
@@ -288,9 +346,14 @@ export async function runHybridTriage(
     return buildOfflineDeterministicTriage(scrubbedText, policyDef.label, t0);
   }
 
+  const nanoReady = await isNanoReadyNow();
+  if (!nanoReady && typeof navigator !== 'undefined' && !navigator.onLine) {
+    return buildOfflineDeterministicTriage(scrubbedText, policyDef.label, t0);
+  }
+
   try {
     const model = getGenerativeModel(ai, {
-      mode: InferenceMode.PREFER_ON_DEVICE,
+      mode: nanoReady ? InferenceMode.PREFER_ON_DEVICE : InferenceMode.ONLY_IN_CLOUD,
       inCloudParams: {
         model: remoteConfig.cloudFallbackModel,
         generationConfig: {
@@ -322,8 +385,8 @@ Respond with JSON: { "summary": "2 concise sentences", "riskScore": 0-100, "seve
 ANONYMIZED DOCUMENT:
 ${scrubbedText.slice(0, remoteConfig.maxOnDeviceChars)}`;
 
-    const result = await model.generateContent(prompt);
-    const source = readInferenceSource(result, 'ON_DEVICE');
+    const result = await withTimeout(model.generateContent(prompt), 20_000, 'Hybrid Triage');
+    const source = readInferenceSource(result, nanoReady ? 'ON_DEVICE' : 'IN_CLOUD');
     const rawOut = result.response.text().trim();
     const jsonMatch = rawOut.match(/\{[\s\S]*\}/);
     const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
@@ -404,8 +467,9 @@ export async function askHybridQuestion(
     throw new Error('Configure Firebase to enable Firebase AI Logic hybrid Q&A.');
   }
   const t0 = performance.now();
+  const nanoReady = await isNanoReadyNow();
   const model = getGenerativeModel(ai, {
-    mode: InferenceMode.PREFER_ON_DEVICE,
+    mode: nanoReady ? InferenceMode.PREFER_ON_DEVICE : InferenceMode.ONLY_IN_CLOUD,
     inCloudParams: { model: remoteConfig.cloudFallbackModel },
     onDeviceParams: {
       createOptions: {
@@ -418,7 +482,7 @@ export async function askHybridQuestion(
   const result = await model.generateContent(
     `Answer concisely in 2-4 sentences using ONLY the anonymized document below. Preserve all [TOKEN_N] placeholders verbatim.\n\nDOCUMENT:\n${scrubbedText.slice(0, remoteConfig.maxOnDeviceChars)}\n\nQUESTION: ${question}`
   );
-  const source = readInferenceSource(result, 'ON_DEVICE');
+  const source = readInferenceSource(result, nanoReady ? 'ON_DEVICE' : 'IN_CLOUD');
   return {
     answer: result.response.text().trim(),
     inferenceSource: source,
@@ -533,9 +597,10 @@ export async function runHybridDisputeDraft(
 
   const t0 = performance.now();
   const policyDef = remoteConfig.policies[policy];
+  const nanoReady = await isNanoReadyNow();
 
   const model = getGenerativeModel(ai, {
-    mode: InferenceMode.PREFER_IN_CLOUD,
+    mode: nanoReady ? InferenceMode.PREFER_IN_CLOUD : InferenceMode.ONLY_IN_CLOUD,
     inCloudParams: {
       model: remoteConfig.cloudAuditModel,
       generationConfig: { temperature: 0.35, maxOutputTokens: 1600 },
