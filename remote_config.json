@@ -2,9 +2,9 @@
   "parameters": {
     "cloud_audit_model": {
       "defaultValue": {
-        "value": "gemini-3.8-flash"
+        "value": "gemini-3.5-flash-lite"
       },
-      "description": "Cloud Gemini model used via Firebase AI Logic ONLY_IN_CLOUD / PREFER_IN_CLOUD for deep audits on locally anonymized documents.",
+      "description": "Cloud Gemini model used via Firebase AI Logic ONLY_IN_CLOUD / PREFER_IN_CLOUD for deep audits on locally anonymized documents (remotely switchable between gemini-3.5-flash-lite and gemini-3.8-flash).",
       "valueType": "STRING"
     },
     "cloud_fallback_model": {

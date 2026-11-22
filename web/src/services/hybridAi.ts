@@ -517,35 +517,6 @@ export async function runDeepCloudAudit(
   const t0 = performance.now();
   const policyDef = remoteConfig.policies[policy];
 
-  const cloudModel = getGenerativeModel(ai, {
-    mode: InferenceMode.ONLY_IN_CLOUD,
-    inCloudParams: {
-      model: remoteConfig.cloudAuditModel,
-      generationConfig: {
-        temperature: 0.25,
-        responseMimeType: 'application/json',
-        responseSchema: Schema.object({
-          properties: {
-            executiveSummary: Schema.string(),
-            overallRiskScore: Schema.integer(),
-            estimatedSavingsUsd: Schema.number(),
-            findings: Schema.array({
-              items: Schema.object({
-                properties: {
-                  title: Schema.string(),
-                  severity: Schema.enumString({ enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] }),
-                  explanation: Schema.string(),
-                  estimatedImpactUsd: Schema.number(),
-                  actionStep: Schema.string(),
-                },
-              }),
-            }),
-          },
-        }),
-      },
-    },
-  });
-
   const prompt = `You are a senior ${policyDef.label} auditor.
 Analyze this ANONYMIZED document for: ${policyDef.auditFocus}.
 CRITICAL: Preserve all anonymized tokens like [PERSON_1], [ORG_1], [ID_1], [ACCT_1] verbatim in your response so the client can rehydrate them locally.
@@ -554,7 +525,57 @@ Quantify dollar savings/exposure where applicable and cite relevant consumer pro
 ANONYMIZED PAYLOAD:
 ${scrubbedText}`;
 
-  const result = await cloudModel.generateContent(prompt);
+  const candidateModels = Array.from(
+    new Set([remoteConfig.cloudAuditModel, remoteConfig.cloudFallbackModel, 'gemini-3.5-flash-lite'])
+  );
+
+  let result: GenerateContentResult | null = null;
+  let usedModel = candidateModels[0];
+  let lastError: unknown = null;
+
+  for (const modelName of candidateModels) {
+    try {
+      const cloudModel = getGenerativeModel(ai, {
+        mode: InferenceMode.ONLY_IN_CLOUD,
+        inCloudParams: {
+          model: modelName,
+          generationConfig: {
+            temperature: 0.25,
+            responseMimeType: 'application/json',
+            responseSchema: Schema.object({
+              properties: {
+                executiveSummary: Schema.string(),
+                overallRiskScore: Schema.integer(),
+                estimatedSavingsUsd: Schema.number(),
+                findings: Schema.array({
+                  items: Schema.object({
+                    properties: {
+                      title: Schema.string(),
+                      severity: Schema.enumString({ enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] }),
+                      explanation: Schema.string(),
+                      estimatedImpactUsd: Schema.number(),
+                      actionStep: Schema.string(),
+                    },
+                  }),
+                }),
+              },
+            }),
+          },
+        },
+      });
+      result = await cloudModel.generateContent(prompt);
+      usedModel = modelName;
+      break;
+    } catch (err) {
+      lastError = err;
+      console.warn(`[CloakBridge] Cloud audit model ${modelName} unavailable, trying next:`, err);
+    }
+  }
+
+  if (!result) {
+    throw lastError instanceof Error ? lastError : new Error('All cloud audit models failed.');
+  }
+
   const parsed = JSON.parse(result.response.text()) as {
     executiveSummary: string;
     overallRiskScore: number;
@@ -570,7 +591,7 @@ ${scrubbedText}`;
     rawScrubbedPayloadSent: scrubbedText,
     inferenceSource: readInferenceSource(result, 'IN_CLOUD'),
     latencyMs: Math.round(performance.now() - t0),
-    modelUsed: remoteConfig.cloudAuditModel,
+    modelUsed: usedModel,
   };
 }
 
@@ -599,20 +620,6 @@ export async function runHybridDisputeDraft(
   const policyDef = remoteConfig.policies[policy];
   const nanoReady = await isNanoReadyNow();
 
-  const model = getGenerativeModel(ai, {
-    mode: nanoReady ? InferenceMode.PREFER_IN_CLOUD : InferenceMode.ONLY_IN_CLOUD,
-    inCloudParams: {
-      model: remoteConfig.cloudAuditModel,
-      generationConfig: { temperature: 0.35, maxOutputTokens: 1600 },
-    },
-    onDeviceParams: {
-      createOptions: {
-        expectedInputs: [{ type: 'text', languages: ['en'] }],
-        expectedOutputs: [{ type: 'text', languages: ['en'] }],
-      },
-    },
-  });
-
   const prompt = `Draft a firm, professional, ready-to-send formal dispute / counter-proposal letter for this ${policyDef.label} case.
 CRITICAL RULE: Use the exact anonymized placeholder tokens found in the document (e.g., [PERSON_1], [ORG_1], [ID_1], [ACCT_1], [LOC_1], [EMAIL_1]) instead of inventing names or leaving blanks, because the user's device will locally rehydrate those tokens after you respond.
 
@@ -622,7 +629,42 @@ ${auditSummary}
 ANONYMIZED DOCUMENT:
 ${scrubbedText.slice(0, remoteConfig.maxOnDeviceChars)}`;
 
-  const result = await model.generateContent(prompt);
+  const candidateModels = Array.from(
+    new Set([remoteConfig.cloudAuditModel, remoteConfig.cloudFallbackModel, 'gemini-3.5-flash-lite'])
+  );
+
+  let result: GenerateContentResult | null = null;
+  let usedModel = candidateModels[0];
+  let lastError: unknown = null;
+
+  for (const modelName of candidateModels) {
+    try {
+      const model = getGenerativeModel(ai, {
+        mode: nanoReady ? InferenceMode.PREFER_IN_CLOUD : InferenceMode.ONLY_IN_CLOUD,
+        inCloudParams: {
+          model: modelName,
+          generationConfig: { temperature: 0.35, maxOutputTokens: 1600 },
+        },
+        onDeviceParams: {
+          createOptions: {
+            expectedInputs: [{ type: 'text', languages: ['en'] }],
+            expectedOutputs: [{ type: 'text', languages: ['en'] }],
+          },
+        },
+      });
+      result = await model.generateContent(prompt);
+      usedModel = modelName;
+      break;
+    } catch (err) {
+      lastError = err;
+      console.warn(`[CloakBridge] Dispute draft model ${modelName} unavailable, trying next:`, err);
+    }
+  }
+
+  if (!result) {
+    throw lastError instanceof Error ? lastError : new Error('All dispute drafting models failed.');
+  }
+
   const scrubbedDraft = result.response.text().trim();
   const rehydratedDraft = rehydrateTextLocally(scrubbedDraft, vaultEntries);
   const source = readInferenceSource(result, 'IN_CLOUD');
@@ -632,6 +674,6 @@ ${scrubbedText.slice(0, remoteConfig.maxOnDeviceChars)}`;
     rehydratedDraft,
     inferenceSource: source,
     latencyMs: Math.round(performance.now() - t0),
-    modelUsed: source === 'ON_DEVICE' ? 'Gemini Nano 4 (Offline Fallback)' : remoteConfig.cloudAuditModel,
+    modelUsed: source === 'ON_DEVICE' ? 'Gemini Nano 4 (Offline Fallback)' : usedModel,
   };
 }
